@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Invoice - Save to Airtable</title>
+<style>
+:root {
+  --card-bg: #fff;
+  --page-bg: #f4f6f8;
+  --accent: #2563eb;
+  --muted: #6b7280;
+}
+
+body {
+  margin: 20px;
+  font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--page-bg);
+  color: #111827;
+}
+
+.container {
+  max-width: 960px;
+  margin: auto;
+  background: var(--card-bg);
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(15,23,42,0.08);
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.logo img { height:64px; object-fit:contain; }
+
+h1 { margin:0; font-size:20px; letter-spacing:0.5px; }
+.muted { color: var(--muted); font-size:0.9rem; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
+
+label { display:block; font-weight:600; margin-bottom:6px; font-size:0.9rem; }
+input[type="text"], input[type="date"], input[type="number"], textarea {
+  width:100%; padding:8px 10px; border:1px solid #e5e7eb; border-radius:6px; font-size:0.95rem; background:#fff; box-sizing:border-box;
+}
+textarea { min-height:60px; resize:vertical; }
+
+.items-table { width:100%; border-collapse:collapse; margin-top:16px; }
+.items-table th, .items-table td { padding:8px 10px; border:1px solid #e6e9ee; text-align:left; font-size:0.95rem; }
+.items-table th { background:#f9fafb; font-weight:600; }
+
+.actions { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+button { padding:10px 14px; border-radius:8px; border:none; cursor:pointer; font-weight:600; }
+.btn-primary { background:var(--accent); color:#fff; }
+
+.totals { margin-top:16px; display:flex; justify-content:flex-end; gap:20px; }
+.totals .box { min-width:260px; background:#f8fafc; border-radius:8px; padding:12px 14px; border:1px solid #eef2ff; }
+.totals .row { display:flex; justify-content:space-between; margin-bottom:8px; font-size:0.95rem; }
+.small { font-size:0.9rem; color:var(--muted); }
+.right { text-align:right; }
+.remove-btn { background:transparent; color:#ef4444; border:none; cursor:pointer; font-weight:600; }
+
+@media (max-width:700px) { .grid { grid-template-columns:1fr; } .totals { justify-content:center; } }
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+  <div class="logo"><img src="/mnt/data/85c96009-1d71-4702-a866-3e012e459a6f.png" alt="logo"></div>
+  <div style="text-align:right">
+    <h1>Invoice</h1>
+    <div class="muted">Saves to Airtable</div>
+  </div>
+</header>
+
+<form id="invoiceForm" onsubmit="return false;">
+  <div class="grid" style="margin-top:18px;">
+    <div>
+      <label for="invoiceNum">Invoice Number</label>
+      <input id="invoiceNum" type="text" placeholder="INV-0001" required>
+      <label for="invoiceDate" style="margin-top:10px;">Invoice Date</label>
+      <input id="invoiceDate" type="date" required>
+    </div>
+    <div>
+      <label for="customerName">Customer Name</label>
+      <input id="customerName" type="text" required>
+      <label for="customerAddress" style="margin-top:10px;">Customer Address</label>
+      <textarea id="customerAddress" required></textarea>
+    </div>
+  </div>
+
+  <h3 style="margin-top:18px;">Items</h3>
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th style="width:48%;">Description</th>
+        <th style="width:12%;">Qty</th>
+        <th style="width:15%;">Rate (RM)</th>
+        <th style="width:15%;">Amount (RM)</th>
+        <th style="width:10%;">Action</th>
+      </tr>
+    </thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+
+  <div style="margin-top:10px;display:flex;gap:10px;">
+    <button type="button" id="addItemBtn">+ Add Item</button>
+    <div style="flex:1"></div>
+    <label class="small" style="align-self:center;">Tax %</label>
+    <input id="taxPercent" type="number" value="6" min="0" style="width:80px;">
+  </div>
+
+  <div class="totals">
+    <div class="box">
+      <div class="row"><div class="small">Subtotal</div><div id="subTotalDisplay" class="right">RM 0.00</div></div>
+      <div class="row"><div class="small">Tax (<span id="taxPercentDisplay">6</span>%)</div><div id="taxAmountDisplay" class="right">RM 0.00</div></div>
+      <div class="row" style="font-size:1.05rem;font-weight:700;"><div>Grand Total</div><div id="grandTotalDisplay" class="right">RM 0.00</div></div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="saveAirtableBtn" class="btn-primary">Save to Airtable</button>
+  </div>
+</form>
+</div>
+
+<script>
+const AIRTABLE_API_KEY = "pat56kE31wyIsWVBP";
+const AIRTABLE_BASE_ID = "appcH2iEDdkzBXKFr";
+const AIRTABLE_TABLE_NAME = "Invoices"; // must match exactly
+
+function moneyFormat(n){ return (Number(n)||0).toFixed(2); }
+
+const itemsBody = document.getElementById('itemsBody');
+const taxPercentInput = document.getElementById('taxPercent');
+const taxPercentDisplay = document.getElementById('taxPercentDisplay');
+
+function createRow(desc='', qty=1, rate=0){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input class="item-desc" value="${desc}" placeholder="Description"></td>
+    <td><input type="number" class="item-qty" value="${qty}" min="0"></td>
+    <td><input type="number" class="item-rate" value="${rate}" min="0" step="0.01"></td>
+    <td class="item-amount">RM ${moneyFormat(qty*rate)}</td>
+    <td><button class="remove-btn">✕</button></td>
+  `;
+  tr.querySelector('.item-desc').addEventListener('input',updateTotals);
+  tr.querySelector('.item-qty').addEventListener('input',updateTotals);
+  tr.querySelector('.item-rate').addEventListener('input',updateTotals);
+  tr.querySelector('.remove-btn').addEventListener('click',()=>{ tr.remove(); updateTotals(); });
+  itemsBody.appendChild(tr);
+  updateTotals();
+}
+
+document.getElementById('addItemBtn').onclick=()=>createRow();
+createRow('Sample service',1,100);
+createRow('Another item',2,50);
+
+function getItemsFromDOM(){
+  return [...itemsBody.querySelectorAll('tr')].map(r=>{
+    const desc=r.querySelector('.item-desc').value.trim();
+    const qty=Number(r.querySelector('.item-qty').value)||0;
+    const rate=Number(r.querySelector('.item-rate').value)||0;
+    return {description:desc, qty, rate, amount:qty*rate};
+  });
+}
+
+function updateTotals(){
+  const items=getItemsFromDOM();
+  const subTotal=items.reduce((s,it)=>s+it.amount,0);
+  const taxPercent=Number(taxPercentInput.value)||0;
+  const taxAmount=subTotal*taxPercent/100;
+  const grandTotal=subTotal+taxAmount;
+
+  document.getElementById('subTotalDisplay').innerText='RM '+moneyFormat(subTotal);
+  document.getElementById('taxAmountDisplay').innerText='RM '+moneyFormat(taxAmount);
+  document.getElementById('grandTotalDisplay').innerText='RM '+moneyFormat(grandTotal);
+  taxPercentDisplay.innerText=taxPercent;
+
+  [...itemsBody.querySelectorAll('tr')].forEach((row,idx)=>{
+    row.querySelector('.item-amount').innerText='RM '+moneyFormat(items[idx].amount);
+  });
+}
+
+taxPercentInput.addEventListener('input',updateTotals);
+
+function buildPayload(){
+  const invoiceNum=document.getElementById('invoiceNum').value.trim();
+  const invoiceDate=document.getElementById('invoiceDate').value;
+  const customerName=document.getElementById('customerName').value.trim();
+  const customerAddress=document.getElementById('customerAddress').value.trim();
+  const items=getItemsFromDOM();
+  const subTotal=items.reduce((s,it)=>s+it.amount,0);
+  const taxPercent=Number(taxPercentInput.value)||0;
+  const taxAmount=subTotal*taxPercent/100;
+  const grandTotal=subTotal+taxAmount;
+  return {invoiceNum, invoiceDate, customerName, customerAddress, items, subTotal, taxAmount, grandTotal};
+}
+
+async function saveToAirtable(payload){
+  const body={fields:{
+    "Invoice Number": payload.invoiceNum,
+    "Invoice Date": payload.invoiceDate,
+    "Customer Name": payload.customerName,
+    "Customer Address": payload.customerAddress,
+    "Items": JSON.stringify(payload.items),
+    "Subtotal": payload.subTotal,
+    "Tax Amount": payload.taxAmount,
+    "Grand Total": payload.grandTotal
+  }};
+  const endpoint=`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(AIRTABLE_TABLE_NAME)}`;
+  try{
+    const res=await fetch(endpoint,{
+      method:'POST',
+      headers:{
+        'Authorization':'Bearer '+AIRTABLE_API_KEY,
+        'Content-Type':'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+    const data=await res.json();
+    console.log('Airtable response:',data);
+    if(!res.ok){ alert('Airtable error: '+(data.error?.message||JSON.stringify(data))); return null; }
+    alert('Invoice saved to Airtable!');
+    return data;
+  }catch(err){
+    console.error('Fetch error:',err);
+    alert('Network/CORS error. Use a server or proxy to call Airtable API.');
+    return null;
+  }
+}
+
+document.getElementById('saveAirtableBtn').onclick=async()=>{
+  const payload=buildPayload();
+  if(!payload.invoiceNum||!payload.invoiceDate||!payload.customerName){
+    alert('Fill invoice number, date & customer name.');
+    return;
+  }
+  if(!payload.items||payload.items.length===0){
+    alert('Add at least one item.');
+    return;
+  }
+  await saveToAirtable(payload);
+};
+
+document.getElementById('invoiceDate').value=new Date().toISOString().slice(0,10);
+</script>
+</body>
+</html>
